@@ -1,6 +1,10 @@
 .env
 .venv/
 
+__pycache__
+.mypy_cache
+.pytest_cache
+
 .serena/
 .codebase-memory/
 
@@ -15,3 +19,5 @@ data/output/
 moulinette/
 moulinette.md
 en.subject.pdf
+
+.gitignore
