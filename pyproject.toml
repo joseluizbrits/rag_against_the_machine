@@ -28,3 +28,8 @@ ignore_missing_imports = true
 disallow_untyped_defs = true
 check_untyped_defs = true
 exclude = "^(data|moulinette|openspec|build|dist)/"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
