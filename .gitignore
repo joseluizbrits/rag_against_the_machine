@@ -1,0 +1,17 @@
+.env
+.venv/
+
+.serena/
+.codebase-memory/
+
+.claude/
+CLAUDE.md
+openspec/
+
+data/raw/
+data/processed/
+data/output/
+
+moulinette/
+moulinette.md
+en.subject.pdf
