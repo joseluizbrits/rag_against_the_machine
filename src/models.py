@@ -14,6 +14,12 @@ class MinimalSource(BaseModel):
     last_character_index: int
 
 
+class Chunk(MinimalSource):
+    """A source location together with the text it covers."""
+
+    text: str
+
+
 class UnansweredQuestion(BaseModel):
     """A question without an answer yet."""
 

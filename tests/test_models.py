@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from src.models import (
     AnsweredQuestion,
+    Chunk,
     MinimalAnswer,
     MinimalSearchResults,
     MinimalSource,
@@ -32,6 +33,17 @@ def test_minimal_source_validates() -> None:
     assert source.file_path == "data/raw/vllm-0.10.1/docs/features/lora.md"
     assert source.first_character_index == 0
     assert source.last_character_index == 100
+
+
+def test_chunk_is_a_minimal_source() -> None:
+    chunk = Chunk(**_source(), text="LoRA adapter loading...")
+    assert isinstance(chunk, MinimalSource)
+    assert chunk.text == "LoRA adapter loading..."
+
+
+def test_chunk_missing_text_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Chunk(**_source())
 
 
 def test_minimal_source_missing_field_rejected() -> None:
