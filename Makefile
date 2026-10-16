@@ -12,7 +12,7 @@ debug:
 clean:
 	uv run python -c "import pathlib, shutil; [shutil.rmtree(p, ignore_errors=True) for p in list(pathlib.Path('.').rglob('*')) if p.is_dir() and p.name in ('__pycache__', '.mypy_cache', '.pytest_cache')]"
 
-FLAKE8_EXCLUDE = .venv,.git,__pycache__,.mypy_cache,.pytest_cache,data,moulinette,openspec,build,dist
+FLAKE8_EXCLUDE = .venv,.git,__pycache__,.mypy_cache,.pytest_cache,data,build,dist
 
 lint:
 	uv run flake8 . --exclude=$(FLAKE8_EXCLUDE)
