@@ -5,6 +5,9 @@ from pathlib import Path
 from src.chunking.corpus import CorpusChunker
 from src.indexing.lexical_index import LexicalIndex
 
+# The moulinette rejects any retrieved source wider than this.
+MAX_SOURCE_LENGTH = 2000
+
 
 def _require_positive_int(value: object, name: str) -> None:
     """Raise ValueError unless value is a real, positive int (no bools)."""
@@ -23,6 +26,11 @@ class RagCli:
     ) -> None:
         """Chunk raw_dir, build a BM25 index, persist it to processed_dir."""
         _require_positive_int(max_chunk_size, "max_chunk_size")
+        if max_chunk_size > MAX_SOURCE_LENGTH:
+            raise ValueError(
+                f"max_chunk_size must be at most {MAX_SOURCE_LENGTH} "
+                f"(the grader rejects longer sources), got {max_chunk_size}"
+            )
         if not Path(raw_dir).is_dir():
             raise ValueError(f"raw_dir does not exist: {raw_dir}")
 

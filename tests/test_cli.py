@@ -41,6 +41,25 @@ def test_index_rejects_invalid_max_chunk_size(
         )
 
 
+def test_index_rejects_chunk_size_above_grading_limit(tmp_path: Path) -> None:
+    raw = _raw_dir(tmp_path)
+    processed = tmp_path / "processed"
+    with pytest.raises(ValueError, match="2000"):
+        RagCli().index(
+            max_chunk_size=2001, raw_dir=str(raw), processed_dir=str(processed)
+        )
+    assert not processed.exists()
+
+
+def test_index_accepts_chunk_size_at_the_limit(tmp_path: Path) -> None:
+    raw = _raw_dir(tmp_path)
+    processed = tmp_path / "processed"
+    RagCli().index(
+        max_chunk_size=2000, raw_dir=str(raw), processed_dir=str(processed)
+    )
+    assert LexicalIndex.load(str(processed)).chunks
+
+
 def test_index_missing_raw_dir_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         RagCli().index(
