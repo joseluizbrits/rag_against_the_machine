@@ -1,9 +1,18 @@
 """Fire CLI for the RAG pipeline."""
 
 from pathlib import Path
+from typing import List
+
+from tqdm import tqdm
 
 from src.chunking.corpus import CorpusChunker
+from src.datasets import load_dataset, save_model
 from src.indexing.lexical_index import LexicalIndex
+from src.models import (
+    MinimalSearchResults,
+    MinimalSource,
+    StudentSearchResults,
+)
 
 # The moulinette rejects any retrieved source wider than this.
 MAX_SOURCE_LENGTH = 2000
@@ -42,3 +51,61 @@ class RagCli:
         index.save(processed_dir)
         print(f"Ingestion complete! Indexed {len(chunks)} chunks under "
               f"{processed_dir}/")
+
+    def search(
+        self,
+        query: str,
+        k: int = 10,
+        processed_dir: str = "data/processed",
+    ) -> None:
+        """Print the k best-matching source locations for query, best first."""
+        if not query.strip():
+            raise ValueError("query must not be empty")
+        _require_positive_int(k, "k")
+
+        index = LexicalIndex.load(processed_dir)
+        results = index.search(query, k)
+        if not results:
+            print("No results found")
+            return
+        for chunk in results:
+            print(
+                f"{chunk.file_path} "
+                f"[{chunk.first_character_index}:{chunk.last_character_index}]"
+            )
+
+    def search_dataset(
+        self,
+        dataset_path: str,
+        k: int = 10,
+        save_directory: str = "data/output/search_results",
+        processed_dir: str = "data/processed",
+    ) -> None:
+        """Search every dataset question, saving a StudentSearchResults."""
+        _require_positive_int(k, "k")
+        dataset = load_dataset(dataset_path)
+        index = LexicalIndex.load(processed_dir)
+
+        results: List[MinimalSearchResults] = []
+        for question in tqdm(dataset.rag_questions, desc="Searching"):
+            chunks = index.search(question.question, k)
+            sources = [
+                MinimalSource(
+                    file_path=chunk.file_path,
+                    first_character_index=chunk.first_character_index,
+                    last_character_index=chunk.last_character_index,
+                )
+                for chunk in chunks
+            ]
+            results.append(
+                MinimalSearchResults(
+                    question_id=question.question_id,
+                    question=question.question,
+                    retrieved_sources=sources,
+                )
+            )
+
+        output = StudentSearchResults(search_results=results, k=k)
+        file_name = Path(dataset_path).name
+        saved_path = save_model(output, save_directory, file_name)
+        print(f"Search results saved to {saved_path}")
