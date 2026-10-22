@@ -2,12 +2,51 @@
 
 import json
 from pathlib import Path
+from typing import List
 
 import pytest
 
 from src.cli import RagCli
+from src.generation import NO_CONTEXT_ANSWER, Answer, AnswerGenerator
 from src.indexing.lexical_index import LexicalIndex
-from src.models import StudentSearchResults
+from src.models import (
+    Chunk,
+    StudentSearchResults,
+    StudentSearchResultsAndAnswer,
+)
+
+
+class _FakeAnswerGenerator:
+    """A generator stub that echoes a fixed answer and records its calls."""
+
+    def __init__(
+        self, response_text: str = "This is a generated answer."
+    ) -> None:
+        """Remember the answer text to return, with no recorded calls yet."""
+        self.response_text = response_text
+        self.questions: List[str] = []
+
+    def answer(self, question: str, chunks: List[Chunk]) -> Answer:
+        """Record question, return response_text or NO_CONTEXT_ANSWER."""
+        self.questions.append(question)
+        if not chunks:
+            return Answer(text=NO_CONTEXT_ANSWER, used_chunks=[])
+        return Answer(text=self.response_text, used_chunks=chunks)
+
+
+def _patch_generator_load(
+    monkeypatch: pytest.MonkeyPatch, fake: _FakeAnswerGenerator
+) -> None:
+    monkeypatch.setattr(
+        AnswerGenerator, "load", classmethod(lambda cls, name: fake)
+    )
+
+
+def _patch_generator_load_failing(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fail(cls: type, name: str) -> AnswerGenerator:
+        raise AssertionError("AnswerGenerator.load must not be called")
+
+    monkeypatch.setattr(AnswerGenerator, "load", classmethod(_fail))
 
 
 def _raw_dir(tmp_path: Path) -> Path:
@@ -214,3 +253,167 @@ def test_search_dataset_malformed_dataset_raises_without_writing(
             processed_dir=str(processed),
         )
     assert not save_directory.exists()
+
+
+def test_answer_prints_answer_and_sources(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    processed = _indexed_processed_dir(tmp_path)
+    fake = _FakeAnswerGenerator(
+        "The lora adapter technique is explained here."
+    )
+    _patch_generator_load(monkeypatch, fake)
+
+    RagCli().answer("lora adapter", k=3, processed_dir=str(processed))
+
+    out = capsys.readouterr().out
+    assert "The lora adapter technique is explained here." in out
+    assert "Sources:" in out
+    assert "b.md" in out
+
+
+def test_answer_no_match_prints_fixed_answer_without_loading_model(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    processed = _indexed_processed_dir(tmp_path)
+    _patch_generator_load_failing(monkeypatch)
+
+    RagCli().answer("qwzxv plorkt", k=3, processed_dir=str(processed))
+
+    assert NO_CONTEXT_ANSWER in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("bad_query", ["", "   "])
+def test_answer_rejects_blank_query_without_loading_model(
+    tmp_path: Path, bad_query: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    processed = _indexed_processed_dir(tmp_path)
+    _patch_generator_load_failing(monkeypatch)
+
+    with pytest.raises(ValueError):
+        RagCli().answer(bad_query, k=3, processed_dir=str(processed))
+
+
+def test_answer_rejects_invalid_k_without_loading_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    processed = _indexed_processed_dir(tmp_path)
+    _patch_generator_load_failing(monkeypatch)
+
+    with pytest.raises(ValueError):
+        RagCli().answer("lora", k=0, processed_dir=str(processed))
+
+
+def test_answer_dataset_writes_answers_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    processed = _indexed_processed_dir(tmp_path)
+    search_results_dir = tmp_path / "search_results"
+    RagCli().search_dataset(
+        dataset_path=str(_dataset_path(tmp_path, [
+            {"question_id": "q1", "question": "lora adapter"},
+            {"question_id": "q2", "question": "qwzxv plorkt"},
+        ])),
+        k=5,
+        save_directory=str(search_results_dir),
+        processed_dir=str(processed),
+    )
+    fake = _FakeAnswerGenerator(
+        "The lora adapter technique is explained here."
+    )
+    _patch_generator_load(monkeypatch, fake)
+    answers_dir = tmp_path / "answers"
+
+    RagCli().answer_dataset(
+        student_search_results_path=str(search_results_dir / "dataset.json"),
+        save_directory=str(answers_dir),
+    )
+
+    saved_path = answers_dir / "dataset.json"
+    assert saved_path.exists()
+    results = StudentSearchResultsAndAnswer.model_validate_json(
+        saved_path.read_text(encoding="utf-8")
+    )
+    assert results.k == 5
+    by_id = {entry.question_id: entry for entry in results.search_results}
+    expected_answer = "The lora adapter technique is explained here."
+    assert by_id["q1"].answer == expected_answer
+    assert by_id["q1"].question == "lora adapter"
+    assert len(by_id["q1"].retrieved_sources) >= 1
+    assert by_id["q2"].retrieved_sources == []
+    assert by_id["q2"].answer == NO_CONTEXT_ANSWER
+
+
+def test_answer_dataset_missing_results_file_raises_without_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeAnswerGenerator()
+    _patch_generator_load(monkeypatch, fake)
+    answers_dir = tmp_path / "answers"
+
+    with pytest.raises(FileNotFoundError):
+        RagCli().answer_dataset(
+            student_search_results_path=str(tmp_path / "missing.json"),
+            save_directory=str(answers_dir),
+        )
+    assert not answers_dir.exists()
+
+
+def test_answer_dataset_malformed_results_file_raises_without_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeAnswerGenerator()
+    _patch_generator_load(monkeypatch, fake)
+    answers_dir = tmp_path / "answers"
+    bad_path = tmp_path / "bad.json"
+    bad_path.write_text("not json", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        RagCli().answer_dataset(
+            student_search_results_path=str(bad_path),
+            save_directory=str(answers_dir),
+        )
+    assert not answers_dir.exists()
+
+
+def test_answer_dataset_unreadable_source_raises_without_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    results_path = tmp_path / "results.json"
+    results_path.write_text(
+        json.dumps(
+            {
+                "search_results": [
+                    {
+                        "question_id": "q1",
+                        "question": "lora adapter",
+                        "retrieved_sources": [
+                            {
+                                "file_path": str(
+                                    tmp_path / "does_not_exist.md"
+                                ),
+                                "first_character_index": 0,
+                                "last_character_index": 5,
+                            }
+                        ],
+                    }
+                ],
+                "k": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake = _FakeAnswerGenerator()
+    _patch_generator_load(monkeypatch, fake)
+    answers_dir = tmp_path / "answers"
+
+    with pytest.raises(FileNotFoundError):
+        RagCli().answer_dataset(
+            student_search_results_path=str(results_path),
+            save_directory=str(answers_dir),
+        )
+    assert not answers_dir.exists()

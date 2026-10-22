@@ -6,15 +6,20 @@ from typing import List
 from tqdm import tqdm
 
 from src.chunking.corpus import CorpusChunker
-from src.datasets import load_dataset, save_model
+from src.datasets import load_dataset, load_search_results, save_model
+from src.generation import NO_CONTEXT_ANSWER, AnswerGenerator
 from src.indexing.lexical_index import LexicalIndex
 from src.models import (
+    MinimalAnswer,
     MinimalSearchResults,
     MinimalSource,
     StudentSearchResults,
+    StudentSearchResultsAndAnswer,
 )
+from src.source_reader import SourceReader
 
-# The moulinette rejects any retrieved source wider than this.
+_DEFAULT_MODEL_NAME = "Qwen/Qwen3-0.6B"
+
 MAX_SOURCE_LENGTH = 2000
 
 
@@ -109,3 +114,69 @@ class RagCli:
         file_name = Path(dataset_path).name
         saved_path = save_model(output, save_directory, file_name)
         print(f"Search results saved to {saved_path}")
+
+    def answer(
+        self,
+        query: str,
+        k: int = 10,
+        processed_dir: str = "data/processed",
+        model_name: str = _DEFAULT_MODEL_NAME,
+    ) -> None:
+        """Print a grounded answer to query and the sources it used."""
+        if not query.strip():
+            raise ValueError("query must not be empty")
+        _require_positive_int(k, "k")
+
+        index = LexicalIndex.load(processed_dir)
+        chunks = index.search(query, k)
+        if not chunks:
+            print(NO_CONTEXT_ANSWER)
+            return
+
+        generator = AnswerGenerator.load(model_name)
+        result = generator.answer(query, chunks)
+        print(result.text)
+        print()
+        print("Sources:")
+        for chunk in result.used_chunks:
+            print(
+                f"{chunk.file_path} "
+                f"[{chunk.first_character_index}:{chunk.last_character_index}]"
+            )
+
+    def answer_dataset(
+        self,
+        student_search_results_path: str,
+        save_directory: str = "data/output/search_results_and_answer",
+        model_name: str = _DEFAULT_MODEL_NAME,
+    ) -> None:
+        """Answer every entry of a search-results file, saving the answers."""
+        results = load_search_results(student_search_results_path)
+        reader = SourceReader()
+        chunks_by_entry = [
+            [reader.read(source) for source in entry.retrieved_sources]
+            for entry in results.search_results
+        ]
+
+        generator = AnswerGenerator.load(model_name)
+        answers: List[MinimalAnswer] = []
+        for entry, chunks in tqdm(
+            list(zip(results.search_results, chunks_by_entry)),
+            desc="Answering",
+        ):
+            generated = generator.answer(entry.question, chunks)
+            answers.append(
+                MinimalAnswer(
+                    question_id=entry.question_id,
+                    question=entry.question,
+                    retrieved_sources=entry.retrieved_sources,
+                    answer=generated.text,
+                )
+            )
+
+        output = StudentSearchResultsAndAnswer(
+            search_results=answers, k=results.k
+        )
+        file_name = Path(student_search_results_path).name
+        saved_path = save_model(output, save_directory, file_name)
+        print(f"Answers saved to {saved_path}")

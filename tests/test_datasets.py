@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from src.datasets import load_dataset, save_model
+from src.datasets import load_dataset, load_search_results, save_model
 from src.models import (
     MinimalSearchResults,
     MinimalSource,
@@ -56,6 +56,60 @@ def test_load_dataset_without_rag_questions_raises_single_line_value_error(
 
     with pytest.raises(ValueError) as excinfo:
         load_dataset(str(path))
+    assert "\n" not in str(excinfo.value)
+
+
+def test_load_search_results_valid_file(tmp_path: Path) -> None:
+    path = tmp_path / "results.json"
+    path.write_text(
+        json.dumps(
+            {
+                "search_results": [
+                    {
+                        "question_id": "q1",
+                        "question": "What is LoRA?",
+                        "retrieved_sources": [],
+                    }
+                ],
+                "k": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    results = load_search_results(str(path))
+
+    assert results.k == 5
+    assert results.search_results[0].question_id == "q1"
+
+
+def test_load_search_results_missing_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        load_search_results(str(tmp_path / "missing.json"))
+
+
+def test_load_search_results_invalid_json_raises_single_line_value_error(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "broken.json"
+    path.write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(ValueError) as excinfo:
+        load_search_results(str(path))
+    assert "\n" not in str(excinfo.value)
+
+
+def test_load_search_results_rag_dataset_shape_raises_single_line_value_error(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "wrong_schema.json"
+    question = {"question_id": "q1", "question": "What is LoRA?"}
+    path.write_text(
+        json.dumps({"rag_questions": [question]}), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        load_search_results(str(path))
     assert "\n" not in str(excinfo.value)
 
 
