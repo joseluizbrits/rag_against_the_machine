@@ -417,3 +417,219 @@ def test_answer_dataset_unreadable_source_raises_without_writing(
             save_directory=str(answers_dir),
         )
     assert not answers_dir.exists()
+
+
+def _results_file(tmp_path: Path, name: str, entries: list, k: int) -> Path:
+    path = tmp_path / name
+    path.write_text(
+        json.dumps({"search_results": entries, "k": k}), encoding="utf-8"
+    )
+    return path
+
+
+def _dataset_file(tmp_path: Path, name: str, questions: list) -> Path:
+    path = tmp_path / name
+    path.write_text(json.dumps({"rag_questions": questions}), encoding="utf-8")
+    return path
+
+
+def test_evaluate_prints_recall_and_counts(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    results_path = _results_file(
+        tmp_path,
+        "results.json",
+        [
+            {
+                "question_id": "q1",
+                "question": "What?",
+                "retrieved_sources": [
+                    {
+                        "file_path": "a.md",
+                        "first_character_index": 0,
+                        "last_character_index": 100,
+                    }
+                ],
+            }
+        ],
+        k=5,
+    )
+    dataset_path = _dataset_file(
+        tmp_path,
+        "dataset.json",
+        [
+            {
+                "question_id": "q1",
+                "question": "What?",
+                "answer": "Because.",
+                "sources": [
+                    {
+                        "file_path": "a.md",
+                        "first_character_index": 0,
+                        "last_character_index": 100,
+                    }
+                ],
+            }
+        ],
+    )
+
+    RagCli().evaluate(
+        student_search_results_path=str(results_path),
+        dataset_path=str(dataset_path),
+    )
+
+    out = capsys.readouterr().out
+    assert "Recall@1: 1.000" in out
+    assert "Recall@5: 1.000" in out
+    assert "Evaluated 1 questions (0 missing from the results)" in out
+
+
+def test_evaluate_small_k_omits_higher_cutoffs(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    results_path = _results_file(
+        tmp_path,
+        "results.json",
+        [
+            {
+                "question_id": "q1",
+                "question": "What?",
+                "retrieved_sources": [
+                    {
+                        "file_path": "a.md",
+                        "first_character_index": 0,
+                        "last_character_index": 100,
+                    }
+                ],
+            }
+        ],
+        k=3,
+    )
+    dataset_path = _dataset_file(
+        tmp_path,
+        "dataset.json",
+        [
+            {
+                "question_id": "q1",
+                "question": "What?",
+                "answer": "Because.",
+                "sources": [
+                    {
+                        "file_path": "a.md",
+                        "first_character_index": 0,
+                        "last_character_index": 100,
+                    }
+                ],
+            }
+        ],
+    )
+
+    RagCli().evaluate(
+        student_search_results_path=str(results_path),
+        dataset_path=str(dataset_path),
+    )
+
+    out = capsys.readouterr().out
+    assert "Recall@1" in out
+    assert "Recall@3" in out
+    assert "Recall@5" not in out
+    assert "Recall@10" not in out
+
+
+def test_evaluate_warns_on_oversized_source(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    results_path = _results_file(
+        tmp_path,
+        "results.json",
+        [
+            {
+                "question_id": "q1",
+                "question": "What?",
+                "retrieved_sources": [
+                    {
+                        "file_path": "a.md",
+                        "first_character_index": 0,
+                        "last_character_index": 2500,
+                    }
+                ],
+            }
+        ],
+        k=5,
+    )
+    dataset_path = _dataset_file(
+        tmp_path,
+        "dataset.json",
+        [
+            {
+                "question_id": "q1",
+                "question": "What?",
+                "answer": "Because.",
+                "sources": [
+                    {
+                        "file_path": "a.md",
+                        "first_character_index": 0,
+                        "last_character_index": 100,
+                    }
+                ],
+            }
+        ],
+    )
+
+    RagCli().evaluate(
+        student_search_results_path=str(results_path),
+        dataset_path=str(dataset_path),
+    )
+
+    assert "Warning: 1 retrieved source(s)" in capsys.readouterr().out
+
+
+def test_evaluate_missing_dataset_raises(tmp_path: Path) -> None:
+    results_path = _results_file(tmp_path, "results.json", [], k=5)
+    with pytest.raises(FileNotFoundError):
+        RagCli().evaluate(
+            student_search_results_path=str(results_path),
+            dataset_path=str(tmp_path / "missing.json"),
+        )
+
+
+def test_evaluate_malformed_results_raises(tmp_path: Path) -> None:
+    results_path = tmp_path / "bad.json"
+    results_path.write_text("not json", encoding="utf-8")
+    dataset_path = _dataset_file(
+        tmp_path,
+        "dataset.json",
+        [
+            {
+                "question_id": "q1",
+                "question": "What?",
+                "answer": "Because.",
+                "sources": [
+                    {
+                        "file_path": "a.md",
+                        "first_character_index": 0,
+                        "last_character_index": 100,
+                    }
+                ],
+            }
+        ],
+    )
+    with pytest.raises(ValueError):
+        RagCli().evaluate(
+            student_search_results_path=str(results_path),
+            dataset_path=str(dataset_path),
+        )
+
+
+def test_evaluate_unanswered_dataset_raises(tmp_path: Path) -> None:
+    results_path = _results_file(tmp_path, "results.json", [], k=5)
+    dataset_path = _dataset_file(
+        tmp_path,
+        "dataset.json",
+        [{"question_id": "q1", "question": "What?"}],
+    )
+    with pytest.raises(ValueError):
+        RagCli().evaluate(
+            student_search_results_path=str(results_path),
+            dataset_path=str(dataset_path),
+        )

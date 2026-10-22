@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from src.chunking.corpus import CorpusChunker
 from src.datasets import load_dataset, load_search_results, save_model
+from src.evaluation import MAX_SOURCE_LENGTH, evaluate as compute_recall
 from src.generation import NO_CONTEXT_ANSWER, AnswerGenerator
 from src.indexing.lexical_index import LexicalIndex
 from src.models import (
@@ -19,8 +20,6 @@ from src.models import (
 from src.source_reader import SourceReader
 
 _DEFAULT_MODEL_NAME = "Qwen/Qwen3-0.6B"
-
-MAX_SOURCE_LENGTH = 2000
 
 
 def _require_positive_int(value: object, name: str) -> None:
@@ -180,3 +179,28 @@ class RagCli:
         file_name = Path(student_search_results_path).name
         saved_path = save_model(output, save_directory, file_name)
         print(f"Answers saved to {saved_path}")
+
+    def evaluate(
+        self, student_search_results_path: str, dataset_path: str
+    ) -> None:
+        """Print recall@k of a results file against a ground-truth dataset."""
+        results = load_search_results(student_search_results_path)
+        dataset = load_dataset(dataset_path)
+        report = compute_recall(results, dataset, dataset_path=dataset_path)
+
+        for k in sorted(report.recall_at):
+            print(f"Recall@{k}: {report.recall_at[k]:.3f}")
+        print(
+            f"Evaluated {report.evaluated} questions "
+            f"({report.missing} missing from the results)"
+        )
+        if report.oversized_sources:
+            print(
+                f"Warning: {report.oversized_sources} retrieved source(s) "
+                f"exceed {MAX_SOURCE_LENGTH} characters and would be rejected"
+            )
+        if report.overlong_entries:
+            print(
+                f"Warning: {report.overlong_entries} entry/entries list more "
+                f"sources than k and would be rejected"
+            )
